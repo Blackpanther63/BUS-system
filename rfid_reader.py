@@ -47,7 +47,7 @@ def handle_rfid_response(rfid_response):
             register_rfid(rfid_response['rfid'])
         else:
             # Open error page if data exists
-            error_url = "https://bus-arka.vercel.app/error"
+            error_url = "https://bus-arka.vercel.app/admin/registration/error"
             webbrowser.open(error_url)
             print(f"Opening error link: {error_url}")
     else:
@@ -62,20 +62,21 @@ def register_rfid(rfid_data=''):
 
 # Function to read RFID data from the Arduino serial input
 def read_rfid(ser):
-    """Read RFID data from the Arduino serial input."""
+    """Read RFID data from the Arduino serial input."""  
     while True:
         if ser.in_waiting > 0:
-            rfid_data_string = ser.readline().decode('utf-8').strip()
+            print(f"Raw RFID data received=====: {ser}")    
+            rfid_data_string = ser.readline().decode('utf-8').strip().replace(" ", "")
 
             # Debug: Print the raw data received
             print(f"Raw RFID data received: {rfid_data_string}")
             
             rfid_data = ''
             # Check if the string starts with "RFID Data" (you can change this to match your exact RFID format)
-            if rfid_data_string.startswith("RFID Data"):
+            if rfid_data_string.startswith("RFIDData"):
                 try:
                     # Extract the actual RFID data and convert it to lowercase
-                    rfid_data = rfid_data_string.split(": ")[1].lower()  # Get the second part after splitting
+                    rfid_data = rfid_data_string.split(":")[1].lower()  # Get the second part after splitting
                     print(f"Extracted RFID: {rfid_data}")  # Output the RFID data
                     
                     # Check the RFID with the server
