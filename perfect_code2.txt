@@ -1,0 +1,247 @@
+void lcdScrollText(String message, int delayTime = 200);
+void handleRFIDEntry(String rfid, String isExit="NO" );
+
+#include <LiquidCrystal_I2C.h>    // Library to control the LCD display using I2C
+#include <SoftwareSerial.h>       // Library to communicate with serial devices (like NodeMCU)
+#include <TinyGPS++.h>            // Library to handle GPS data
+#include <Wire.h>                 // Required for I2C communication
+#include <SPI.h>                  // Required for RFID (if SPI communication used)
+#include <MFRC522.h>               // RFID Library
+
+ #define GREEN_LED 6              // Pin number for the Green LED
+ #define BLUE_LED 7              // Pin number for the Red LED
+ #define BUZZER 8                 // Pin number for the Buzzer
+
+//RFID PINS 
+#define SS_PIN 10  // SDA pin connected to Pin 10
+#define RST_PIN 9  // RST pin connected to Pin 9
+
+// Global variables
+String storedUID = "";    //store RFID after read it 
+bool isRFIDScanned = false;             // Flag to check if RFID is scanned
+String lastScannedRFID = "";            // Store the last scanned RFID code
+String busNo1 = "JH05DT6619";            // Bus number (fixed for this example)
+double gps_lat;
+double gps_lng;
+
+ unsigned long lastPrintTime = 0;        // Store the last time GPS location was printed
+ const unsigned long gpsInterval = 300000; // Time interval to update GPS data (5 minutes in milliseconds)
+ bool firstPrintDone = false;            // Flag to ensure GPS prints only once initially
+
+//RFID SETUP
+MFRC522 rfid(SS_PIN, RST_PIN); // Create instance of the MFRC522 class
+MFRC522::MIFARE_Key key;
+
+// LCD setup
+LiquidCrystal_I2C lcd(0x27,20,4);     // Initialize LCD display with I2C address 0x27 (16x2)
+
+// GPS and RFID setup
+SoftwareSerial serial_connection(3,4); //tx,rx 
+TinyGPSPlus gps;// GPS object to process the NMEA data
+
+void clearSerialBuffer() {
+  while (Serial.available() > 0) {
+    Serial.read(); // Read and discard any data in the buffer
+  }
+}
+
+
+void waitForSerialData() {
+  // Base condition: check if data is available on the serial port
+  if (Serial.available() > 0) {
+      String response = Serial.readString(); // Read response from NodeMCU
+    if (response.indexOf("STUD_RESPO::") != -1) {
+//        Serial.println("Data is available."+response);
+        return; // Return when data is available
+      }     
+  } else {
+//     Serial.println("Data is not available.");
+    // If no data is available, recursively call the function after a small delay
+    delay(500);
+    waitForSerialData(); // Recursive call
+  }
+}
+
+void turnOnGreenLED(int delaytime) {
+  digitalWrite(GREEN_LED, HIGH);  // Turn ON Green LED
+  delay(delaytime);
+  digitalWrite(GREEN_LED, LOW);     // Turn OFF Red LED
+}
+
+// Function to turn on Red LED (Failure)
+void turnOnBlueLED(int delaytime) {
+  digitalWrite(BLUE_LED, HIGH);    // Turn ON Red LED
+  delay(delaytime);
+  digitalWrite(BLUE_LED, LOW);   // Turn OFF Green LED
+}
+
+
+void setup()
+{
+  
+  Serial.begin(9600);                //This opens up communications to the Serial monitor in the Arduino IDE
+  serial_connection.begin(9600);     //This opens up communications to the GPS
+  // Set up LED and buzzer pins as OUTPUT
+   pinMode(GREEN_LED, OUTPUT);   
+   pinMode(BLUE_LED, OUTPUT);
+   pinMode(BUZZER, OUTPUT);
+
+   // Initialize LCD
+  lcd.init(); 
+  lcd.backlight();
+  
+  lcd.print("GPS Init");
+  delay(150);                           // Wait for 2 seconds
+  lcd.clear();                           // Clear the LCD screen
+  
+  lcd.print("RFID Init");
+  delay(150);                           // Wait for 2 seconds
+  lcd.clear();                           // Clear the LCD screen
+  // RFID INIT 
+  SPI.begin();          // Initialize SPI bus
+  rfid.PCD_Init();      // Initialize the RFID reader
+  
+  lcd.print("RFID start");
+  delay(100);                           // Wait for 2 seconds
+  lcd.clear();                           // Clear the LCD screen
+  
+  lcd.print("Initializing..");
+  delay(200);                           // Wait for 2 seconds
+  lcd.clear();                           // Clear the LCD screen
+}
+
+void loop()
+{
+  while(serial_connection.available())              //While there are incoming characters  from the GPS
+  {
+    gps.encode(serial_connection.read());           //This feeds the serial NMEA data into the library one char at a time
+  }
+  if(gps.location.isUpdated())          //This will pretty much be fired all the time anyway but will at least reduce it to only after a package of NMEA data comes in
+  {
+    //Get the latest info from the gps object which it derived from the data sent by the GPS unit
+    gps_lat=gps.location.lat();
+    gps_lng=gps.location.lng();
+    sendGPSData();
+//    Serial.println("bus location call");
+      lcd.clear();
+      lcd.print("Bus Location Add");
+  }    
+    delay(500); 
+    lcd.clear();
+    lcd.print("Scan Your RFID..");
+     delay(500);   
+    if (!rfid.PICC_IsNewCardPresent()) {
+      return;
+    }
+    // Read the RFID card
+    if (!rfid.PICC_ReadCardSerial()) {
+      return;
+    }
+// Print the UID of the card to the serial monitor
+  storedUID = "";  // Clear the variable first
+  for (byte i = 0; i < rfid.uid.size; i++) {
+  //    Serial.print(rfid.uid.uidByte[i] < 0x10 ? "0" : ""); // Prepend a 0 if necessary
+  //    Serial.print(rfid.uid.uidByte[i], HEX);
+
+    if (rfid.uid.uidByte[i] < 0x10) {
+      storedUID += "0";  // Add leading zero if byte is less than 0x10
+    }
+    storedUID += String(rfid.uid.uidByte[i], HEX);  // Convert byte to hex and append to storedUID
+  }
+
+  if(storedUID){
+    isRFIDScanned=true;
+  }
+  // Halt the card to stop reading
+  rfid.PICC_HaltA();
+
+  // Simulating RFID scan (replace with actual RFID logic)
+  if (isRFIDScanned) { 
+    String currentRFID = storedUID; // Simulate an RFID reading. Replace with actual RFID reading logic
+    if (currentRFID == lastScannedRFID) {
+      handleRFIDEntry(currentRFID,"YES"); // Handle user exit
+    } else {
+      handleRFIDEntry(currentRFID,"NO"); // Handle new entry
+    }
+  } 
+}
+
+// Handle the first-time RFID scan (user entering the bus)
+void handleRFIDEntry(String rfid, String isExit="NO" ) {
+  String studentBusNo="JH05DT6616";
+   lastScannedRFID = rfid;  // Store the RFID code for future comparison
+   lcd.clear();
+   
+   lcd.print("RFID Scanned");
+   if(isExit!="YES"){
+     successBuzzerTone(); 
+   }else{
+        failureBuzzerTone(); 
+     }  
+      
+  
+  String studAPI = "STUD_RFID::" + rfid + ",STUD_BUSNO::" + busNo1+";";
+
+  clearSerialBuffer();
+  Serial.println(studAPI);
+
+  waitForSerialData();
+        // Check if the string contains "STUD_RESPO::"
+    if (response.indexOf("STUD_RESPO::") != -1) {
+      Serial.println("");
+        String studRespoCode;
+        int studRespoStart = response.indexOf("STUD_RESPO::") + String("STUD_RESPO::").length();  // Find the start of the code
+        studRespoCode = response.substring(studRespoStart);  // Extract the value after "STUD_RESPO::"
+    //    Serial.print("Extracted Response Code: ");
+//        Serial.println(studRespoCode);  // Print the response code
+        int studRespoCodeInt = studRespoCode.toInt();
+
+        if (studRespoCodeInt == 200) {
+    turnOnGreenLED(500);    // Turn on the green LED for 500ms
+    lcd.clear();
+    lcd.print("Seat Book"); // Show "Seat Book" message
+    delay(1000);            // Delay for 1 second before proceeding
+    successBuzzerTone();    // Play success buzzer sound
+    delay(1000);            // Allow the buzzer sound to complete
+} else if (studRespoCodeInt == 201) {
+    turnOnBlueLED(500);     // Turn on the blue LED for 500ms
+    lcd.clear();
+    lcd.print("Stud Left"); // Show "Stud Left" message
+    delay(1000);            // Delay for 1 second before proceeding
+    successBuzzerTone();    // Play success buzzer sound
+    delay(1000);            // Allow the buzzer sound to complete
+} else {
+    turnOnBlueLED(500);     // Turn on the blue LED for 500ms
+    lcd.clear();
+    lcd.print("Seat not booked"); // Show "Seat not booked" message
+    failureBuzzerTone();    // Play failure buzzer sound
+    delay(1000);            // Delay for 1 second before proceeding
+}
+
+  } 
+}
+
+
+// Send GPS data periodically (every 5 minutes)
+void sendGPSData() {
+  // Prepare GPS data in the format "latitude,longitude"
+  String gpsData = "BUS_NO::" + busNo1 + ",GPS_LAT::" + String(gps.location.lat(), 10) + ",GPS_LNG::" + String(gps.location.lng(), 10)+";";
+  // Send the GPS data to NodeMCU
+  Serial.println(gpsData);
+  delay(500);
+}
+
+//SUCCESS BUZZER TONE 
+void successBuzzerTone() {
+  tone(BUZZER, 1000, 100);  // Play a 1000 Hz tone for 100 ms
+  delay(150);                // Pause for a brief moment
+  tone(BUZZER, 1200, 100);   // Play a 1200 Hz tone for 100 ms
+  delay(150);
+  tone(BUZZER, 1500, 100);   // Play a 1500 Hz tone for 100 ms
+  delay(150);
+}
+
+//FAIL BUZZER TONE
+void failureBuzzerTone() {
+  tone(BUZZER, 2000, 1500);   // Play a 2000 Hz tone for 2000 ms
+}

@@ -1,0 +1,371 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiClientSecure.h>
+
+// Define multiple Wi-Fi credentials
+const char* ssids[] = {"JioFiber-84KxT","realme9","POCOM2Pro"};
+const char* passwords[] = {"AhUT1836#@","b3996mue","1223334444"};
+const int numNetworks = sizeof(ssids) / sizeof(ssids[0]);
+
+const char* apiUrl = "https://bus-arka-server.vercel.app/api/bus_location/update";
+const char* apiUrlGET = "https://jsonplaceholder.typicode.com/todos/1";
+
+unsigned long previousMillis = 0;
+const long interval = 5000;
+
+String stud_rfid = "";
+String stud_busno = "";
+
+String busno = "";
+double bus_lat=0.0;
+double bus_lng=0.0;
+
+
+//response filter function
+int getHttpStatusCode(String response) {
+  // Extract the HTTP status code (first three digits after "HTTP/1.1")
+  int statusCodeStart = response.indexOf("HTTP/1.1 ") + 9;  // Starting after "HTTP/1.1 "
+  int statusCodeEnd = response.indexOf(" ", statusCodeStart);  // Find the first space after the status code
+
+  if (statusCodeStart != -1 && statusCodeEnd != -1) {
+    String statusCodeStr = response.substring(statusCodeStart, statusCodeEnd);  // Extract the status code as a string
+    return statusCodeStr.toInt();  // Convert to integer and return
+  } else {
+    Serial.println("Error: Could not extract HTTP status code");
+    return -1;  // Return -1 if status code could not be found
+  }
+}
+
+
+// Function to connect to Wi-Fi
+bool connectToWiFi() {
+  for (int i = 0; i < numNetworks; i++) {
+//    Serial.print("Trying SSID: ");
+//    Serial.println(ssids[i]);
+    WiFi.begin(ssids[i], passwords[i]);
+    unsigned long startAttemptTime = millis();
+
+    // Wait for connection or timeout after 10 seconds
+    while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) {
+      delay(500);
+//      Serial.print(".");
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+//      Serial.println("\nWiFi connected!");
+//      Serial.print("Connected to SSID: ");
+//      Serial.println(ssids[i]);
+//      Serial.print("IP Address: ");
+//      Serial.println(WiFi.localIP());
+      return true; // Connected successfully
+    } else {
+//      Serial.println("\nFailed to connect to SSID: ");
+//      Serial.println(ssids[i]);
+    }
+  }
+
+//  Serial.println("Failed to connect to any Wi-Fi network.");
+  return false; // Failed to connect
+}
+
+
+void setup() {
+  Serial.begin(9600);
+  delay(10);
+   if (!connectToWiFi()) {
+//    Serial.println("No Wi-Fi connection available. Retrying in the loop...");
+  }
+}
+
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) {
+//    Serial.println("Wi-Fi connection lost. Attempting to reconnect...");
+    if (!connectToWiFi()) {
+//      Serial.println("Reconnection failed. Retrying...");
+      delay(100);
+    }
+  }
+//  Serial.println("WiFi connected!");
+//  Serial.println("IP Address: ");
+//  Serial.println(WiFi.localIP());
+
+  if (Serial.available()) {
+    //  Serial.println("inside mySerial===");
+    String data = Serial.readString(); // Read data from Arduino
+    // Serial.println("Received data from UNO:" + data);
+
+    // STUDENT RFID REQUEST START
+   if (data.indexOf("STUD_RFID::") != -1 && data.indexOf("STUD_BUSNO::") != -1) {
+        
+      int rfidStart = data.indexOf("STUD_RFID::") + String("STUD_RFID::").length();
+      int rfidEnd = data.indexOf(",STUD_BUSNO::");
+      if (rfidStart > 0 && rfidEnd > rfidStart) {
+          String temp = data.substring(rfidStart, rfidEnd); // Extract the substring
+          temp.trim(); // Trim in place
+          stud_rfid = temp; // Assign to stud_rfid
+      }
+  
+      int busNoStart = data.indexOf("STUD_BUSNO::") + String("STUD_BUSNO::").length();
+      int busNoEnd = data.indexOf(";", busNoStart); // Find the index of the semicolon
+      if (busNoStart > 0 && busNoEnd > busNoStart) {
+          String temp = data.substring(busNoStart, busNoEnd); // Extract the substring
+          temp.trim(); // Trim in place
+          stud_busno = temp; // Assign to stud_busno
+      }       
+      // Check if both RFID and Bus Number are valid
+      if (stud_rfid != "" && stud_busno != "") {
+          // Process the values
+          sendcURLStudentLoginPostRequest(stud_rfid, stud_busno); // student API call
+      } else {
+        //   Serial.println("Either RFID or Bus Number is missing.");
+      }
+  }
+
+   // STUDENT RFID REQUEST END
+
+    // BUS LOCATION UPDATE START
+  if (data.indexOf("BUS_NO::") != -1 && data.indexOf("GPS_LAT::") != -1 && data.indexOf("GPS_LNG::") != -1) {
+      String busno="";
+        // Extract Bus Number
+        int busnoStart = data.indexOf("BUS_NO::") + String("BUS_NO::").length();
+        int busnoEnd = data.indexOf(",GPS_LAT::");
+        if (busnoStart > 0 && busnoEnd > busnoStart) {
+            busno = data.substring(busnoStart, busnoEnd);
+        }
+        
+        // Extract GPS Latitude
+        int gpsLatStart = data.indexOf("GPS_LAT::") + String("GPS_LAT::").length();
+        int gpsLatEnd = data.indexOf(",GPS_LNG::");
+        if (gpsLatStart > 0 && gpsLatEnd > gpsLatStart) {
+            bus_lat = data.substring(gpsLatStart, gpsLatEnd).toDouble();
+        }
+
+        int gpsLngStart = data.indexOf("GPS_LNG::") + String("GPS_LNG::").length();
+        int gpsLngEnd = data.indexOf(";", gpsLngStart); // Find the index of the semicolon
+        
+        if (gpsLngStart > 0 && gpsLngEnd > gpsLngStart) {
+            String lngStr = data.substring(gpsLngStart, gpsLngEnd); // Extract the longitude part
+            lngStr.trim(); // Trim the string
+            bus_lng = lngStr.toDouble(); // Convert the trimmed string to double
+        } else if (gpsLngStart > 0) {
+            String lngStr = data.substring(gpsLngStart); // Extract until the end of the string
+            lngStr.trim(); // Trim the string
+            bus_lng = lngStr.toDouble(); // Convert the trimmed string to double
+        }
+
+        
+      if (bus_lat != 0.0 && bus_lng != 0.0 && busno != "") {
+          // Process the values
+          sendcURLBusLocationPostRequest(busno, String(bus_lat, 6), String(bus_lng, 6));  // Convert double to String with 6 decimal places
+          
+      } else {
+          Serial.println("Either RFID or Bus Number is missing.");
+      }
+    }// BUS LOCATION UPDATE START
+    
+  }
+  callBusLocationAPI();
+  delay(1000);
+}
+
+void callBusLocationAPI() {
+  WiFiClientSecure client;
+  HTTPClient http;
+
+  Serial.println("Starting POST request...");
+
+  client.setInsecure();
+
+  const char* postApiUrl = "https://bus-arka-server.vercel.app/api/bus_location/update";
+
+  http.begin(client, postApiUrl);
+
+  http.addHeader("Content-Type", "application/json");
+
+  String payload = "{\"reg_no\":\"JH05DT6619\", \"latitude\":25.11111, \"longitude\":91.22222}";
+
+
+  int httpCode = http.POST(payload);
+
+  Serial.print("HTTP Code: ");
+  Serial.println(httpCode);
+
+  if (httpCode > 0) {
+    String response = http.getString();
+    Serial.println("Response: ");
+    Serial.println(response);
+  } else {
+    Serial.print("POST request failed with code: ");
+    Serial.println(httpCode);
+  }
+  http.end();
+}
+
+void callTestPostAPI() {
+  WiFiClientSecure client;
+  HTTPClient http;
+
+  Serial.println("Starting POST request...");
+
+  client.setInsecure();
+
+  const char* postApiUrl = "https://jsonplaceholder.typicode.com/posts";
+
+  http.begin(client, postApiUrl);
+
+  http.addHeader("Content-Type", "application/json");
+
+  String payload = "{\"title\":\"foo wqqwe\", \"body\":\"bar qweqw\", \"userId\":5}";
+
+  int httpCode = http.POST(payload);
+
+  Serial.print("HTTP Code: ");
+  Serial.println(httpCode);
+
+  if (httpCode > 0) {
+    String response = http.getString();
+    Serial.println("Response: ");
+    Serial.println(response);
+  } else {
+    Serial.print("POST request failed with code: ");
+    Serial.println(httpCode);
+  }
+
+  http.end();
+}
+
+void callTestGetAPI() {
+  WiFiClientSecure client;
+  HTTPClient http;
+
+  Serial.println("Starting GET request...");
+
+  client.setInsecure();
+
+  http.begin(client, apiUrlGET);
+
+  http.addHeader("Accept", "application/json");
+
+  int httpCode = http.GET();
+
+  Serial.print("HTTP Code: ");
+  Serial.println(httpCode);
+
+  if (httpCode > 0) {
+    String response = http.getString();
+    Serial.println("Response: ");
+    Serial.println(response);
+  } else {
+    Serial.print("GET request failed with code: ");
+    Serial.println(httpCode);
+  }
+
+  http.end();
+}
+
+
+void sendcURLBusLocationPostRequest(String busno, String bus_lat_str, String bus_lng_str) {
+  WiFiClientSecure client;
+  client.setInsecure();  // Disable SSL certificate verification
+
+  const char* host = "bus-arka-server.vercel.app";
+  const char* endpoint = "/api/bus_location/update";
+
+  if (!client.connect(host, 443)) {
+    Serial.println("Connection failed!");
+    return;
+  }
+
+  // Convert String to double
+  double bus_lat = bus_lat_str.toDouble();
+  double bus_lng = bus_lng_str.toDouble();
+
+  // Convert latitude and longitude to char arrays with 6 decimal places
+  char lat_str[20];
+  char lng_str[20];
+  dtostrf(bus_lat, 5, 6, lat_str);  // 5 total characters (including decimals), 6 decimal places
+  dtostrf(bus_lng, 5, 6, lng_str);  // 5 total characters (including decimals), 6 decimal places
+
+  // JSON payload for the POST request
+  String payload = "{\"reg_no\":\"" + busno + "\",\"latitude\":" + lat_str + ",\"longitude\":" + lng_str + "}";
+  Serial.println(payload);
+
+  // Construct the POST request
+  String request = String("POST ") + endpoint + " HTTP/1.1\r\n" +
+                   "Host: " + host + "\r\n" +
+                   "Content-Type: application/json\r\n" +
+                   "Content-Length: " + payload.length() + "\r\n" +
+                   "Connection: close\r\n\r\n" +
+                   payload;
+
+  // Send the request
+  client.print(request);
+
+    String response = "";
+  // Read and print the server's response
+  while (client.connected() || client.available()) {
+    if (client.available()) {
+      response = client.readString();
+    //   Serial.println("Response:");
+    //   Serial.println(response);
+      break;
+    }
+  }
+
+    int statusCode = getHttpStatusCode(response);
+    if (statusCode != -1) {
+        Serial.println("BUS_RESPO::" + statusCode);
+    }else{
+         Serial.println("BUS_RESPO::600");
+    }
+  client.stop();
+}
+
+
+void sendcURLStudentLoginPostRequest(String stud_rfid, String stud_busno) {
+  Serial.println("Call sendcURLStudentLoginPostRequest=====");
+  WiFiClientSecure client;
+  client.setInsecure();  // Disable SSL certificate verification
+
+  const char* host = "bus-arka-server.vercel.app";
+  const char* endpoint = "/api/rfid/check";
+
+  if (!client.connect(host, 443)) {
+    Serial.println("Connection failed!");
+    return;
+  }
+
+  // JSON payload for the POST request
+  String payload = "{\"rfid_code\":\"" + stud_rfid + "\",\"reg_no\":\"" + stud_busno + "\"}";
+  Serial.println(payload);
+  
+  // Construct the POST request
+  String request = String("POST ") + endpoint + " HTTP/1.1\r\n" +
+                   "Host: " + host + "\r\n" +
+                   "Content-Type: application/json\r\n" +
+                   "Content-Length: " + payload.length() + "\r\n" +
+                   "Connection: close\r\n\r\n" +
+                   payload;
+
+  // Send the request
+  client.print(request);
+
+  // Read and print the server's response
+  String response = "";
+  while (client.connected() || client.available()) {
+    if (client.available()) {
+      response = client.readString();
+    //   Serial.println("Response:");
+    //   Serial.print(response);
+      break;
+    }
+  }
+    int statusCode = getHttpStatusCode(response);
+    if (statusCode != -1) {
+        Serial.println("STUD_RESPO::" + statusCode);
+    }else{
+         Serial.println("STUD_RESPO::600");
+    }
+    
+  client.stop();
+}
